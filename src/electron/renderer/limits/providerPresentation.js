@@ -16,6 +16,44 @@
 })(typeof window !== 'undefined' ? window : null, function createLimitProviderPresentationApi(accountIdentityApi, limitWindowLabelsApi, workbuddyIdentityApi) {
   const { isMimoMembershipProduct } = limitWindowLabelsApi;
   const { isWorkbuddyPlaceholder } = workbuddyIdentityApi;
+  // Translate display labels only. Original window labels also participate in
+  // persisted visibility keys and provider-specific matching.
+  const LIMIT_DISPLAY_LABEL_KEYS = new Map([
+    ['Session', 'home.limit.session'], ['Weekly', 'home.limit.weekly'],
+    ['Daily', 'home.limit.daily'], ['Monthly', 'home.limit.monthly'],
+    ['5-hour', 'limits.window.fiveHour'], ['Balance', 'subscription.tooltip.balance'],
+    ['Spend', 'limits.label.spend'], ['Details', 'limits.label.details'],
+    ['Today', 'edgeDock.period.today'], ['Week', 'limits.label.week'],
+    ['Month', 'settings.typesafe.month'], ['All time', 'trayComposer.period.allTime'],
+    ['Quota', 'notch.quota'], ['Usage', 'settings.tools.health.usage'],
+    ['Credits', 'limits.label.credits'], ['Credit', 'limits.label.credit'],
+    ['Overage', 'limits.label.overage'], ['Monthly credits used', 'limits.label.monthlyCreditsUsed'],
+    ['Included credits', 'limits.label.includedCredits'], ['Credit balance', 'limits.label.creditBalance'],
+    ['Token quota', 'limits.label.tokenQuota'], ['Resets', 'limits.label.resets'],
+    ['Requests', 'settings.thirdparty.requests'],
+    ['Tokens', 'settings.typesafe.tokens'],
+    ['Included usage', 'limits.label.includedUsage'],
+    ['Prepaid balance', 'limits.label.prepaidBalance'],
+    ['On-demand spend', 'limits.label.onDemandSpend'],
+    ['Cursor Models', 'limits.label.cursorModels'],
+    ['Other Models', 'limits.label.otherModels'],
+    ['Overall', 'limits.label.overall'],
+    ['Team pool', 'limits.label.teamPool'],
+    ['Extra usage balance', 'limits.label.extraUsageBalance'],
+    ['Usage credits', 'limits.label.usageCredits'],
+    ['Token Spend', 'limits.label.tokenSpend'],
+    ['Bonus', 'limits.label.bonus'],
+    ['Top-up', 'limits.label.topUp']
+  ]);
+
+  // Payload labels are opaque names, even when they match a generic UI word.
+  // Callers mark those explicitly; synthesized headings use the vocabulary.
+  function limitDisplayLabel(label, t, { explicit = false } = {}) {
+    if (explicit) return label;
+    const key = LIMIT_DISPLAY_LABEL_KEYS.get(label);
+    return key ? t(key) : label;
+  }
+
   const SOURCE_LABELS = {
     oauth: 'OAuth',
     cli: 'CLI',
@@ -38,7 +76,7 @@
     zed: { web: 'Web' },
     commandcode: { web: 'Web' },
     mimo: { web: 'Web' },
-    muse: { cli: 'CLI' },
+    muse: { cli: 'CLI', web: 'Web' },
     zai: { api: 'API' },
     zaiteam: { api: 'API' },
     kiro: { cli: 'CLI' },
@@ -53,6 +91,7 @@
     trae: { api: 'Web' },
     alibaba: { web: 'Web' },
     stepfun: { web: 'Web' },
+    manus: { local: 'Local', web: 'Web' },
     thirdparty: { api: 'API' }
   };
 
@@ -77,7 +116,7 @@
     zed: ['Manual login', 'Web'],
     commandcode: ['Manual login', 'Web'],
     mimo: ['Auto', 'Desktop app', 'Token Plan'],
-    muse: ['Auto', 'CLI'],
+    muse: ['Auto', 'CLI', 'Web', 'Manual'],
     zai: ['Auto', 'Coding Plan', 'API key'],
     zaiteam: ['Team Plan', 'API key'],
     kiro: ['Auto', 'CLI'],
@@ -85,7 +124,8 @@
     qoder: ['Manual login', 'Web'],
     deepseek: ['Pay-as-you-go', 'API key'],
     devin: ['Manual login', 'Web'],
-    minimax: ['Token Plan', 'Pay-as-you-go', 'API key'],
+    minimax: ['Auto', 'Token Plan', 'Pay-as-you-go', 'API key'],
+    mistral: ['Web', 'Manual'],
     typesafe: ['Manual login', 'Web'],
     openrouter: ['Pay-as-you-go', 'API key'],
     volcengine: ['Auto', 'API key', 'CLI'],
@@ -94,6 +134,8 @@
     alibaba: ['Token Plan', 'Web'],
     stepfun: ['Coding/Token Plan', 'Web'],
     notion: ['Web', 'Manual'],
+    manus: ['Auto', 'Desktop app', 'Manual'],
+    opendesign: ['Web', 'Manual'],
     thirdparty: ['Relay', 'API']
   };
 
@@ -322,7 +364,7 @@
       .map((entry) => entry.window);
   }
 
-  function limitProviderCompactWindowLabel(providerOrId, window, visibleWindows = []) {
+  function limitProviderCompactWindowLabel(providerOrId, window, visibleWindows = [], t) {
     if (providerId(providerOrId) === 'zai' && normalizeId(window?.kind) === 'daily') {
       return String(window?.label || '').trim();
     }
@@ -331,15 +373,15 @@
     const quota = antigravityQuotaWindow(window);
     if (!labels.length || !quota || labels.some((label) => !label)) return '';
     const groups = new Set(labels);
-    if (groups.size === 1 && groups.has(quota.groupLabel)) return `${quota.groupLabel} ${quota.windowLabel}`;
+    if (groups.size === 1 && groups.has(quota.groupLabel)) return `${quota.groupLabel} ${t ? limitDisplayLabel(quota.windowLabel, t) : quota.windowLabel}`;
     return groups.size === labels.length ? quota.groupLabel : '';
   }
 
-  function limitProviderCompactWindowPeriodLabel(providerOrId, window, visibleWindows = []) {
+  function limitProviderCompactWindowPeriodLabel(providerOrId, window, visibleWindows = [], t) {
     const quota = antigravityQuotaWindow(window);
     // Single-group labels already include the period, even without reset data.
     return quota && limitProviderCompactWindowLabel(providerOrId, window, visibleWindows) === quota.groupLabel
-      ? quota.windowLabel
+      ? (t ? limitDisplayLabel(quota.windowLabel, t) : quota.windowLabel)
       : '';
   }
 
@@ -371,10 +413,16 @@
   // page and the edge dock render the same meters, and a window that says
   // "Expires" on one and "Reset" on the other is describing two different
   // products.
-  function limitBoundaryText(window) {
+  function limitBoundaryText(window, t) {
     const diffMs = limitResetRemainingMs(window?.resetsAt);
     if (diffMs === null) return '';
     const mixed = window?.boundaryKind === 'mixed';
+    if (t) {
+      const kind = window?.boundaryKind === 'expiry' ? 'expiry' : mixed ? 'mixed' : 'reset';
+      return t(`limits.boundary.${kind}${diffMs === 0 ? 'Now' : ''}`, {
+        duration: limitDurationText(diffMs)
+      });
+    }
     const prefix = window?.boundaryKind === 'expiry'
       ? 'Expires'
       : mixed
@@ -406,6 +454,8 @@
       || providerName === 'cursor'
       || (providerName === 'opencode' && source === 'web')
       || (providerName === 'mimo' && source === 'web')
+      || (providerName === 'manus' && source === 'web')
+      || (providerName === 'muse' && source === 'web')
       || (providerName === 'zed' && source === 'web');
   }
 
@@ -418,26 +468,32 @@
   // `tone` is what a surface decorates with; the words do not change with it.
   function limitProviderFreshness(provider, options = {}) {
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const t = options.t;
     const at = Date.parse(provider?.updatedAt || provider?.checkedAt || '');
     if (!Number.isFinite(at)) {
-      return { text: provider?.stale ? 'Stale' : 'Update unknown', age: '', tone: provider?.stale ? 'stale' : 'unknown' };
+      const text = t
+        ? t(provider?.stale ? 'settings.limits.status.stale' : 'limits.updateUnknown')
+        : provider?.stale ? 'Stale' : 'Update unknown';
+      return { text, age: '', tone: provider?.stale ? 'stale' : 'unknown' };
     }
     const diffMs = Math.max(0, nowMs - at);
     let age;
     if (diffMs < 45_000) {
-      age = 'just now';
+      age = t ? t('settings.age.justNow') : 'just now';
     } else {
       const minutes = Math.round(diffMs / 60000);
       if (minutes < 60) {
-        age = `${minutes}m ago`;
+        age = t ? t('settings.age.minutesAgo', { minutes }) : `${minutes}m ago`;
       } else {
         const hours = Math.round(minutes / 60);
-        age = hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+        age = hours < 24
+          ? (t ? t('settings.age.hoursAgo', { hours }) : `${hours}h ago`)
+          : (t ? t('settings.age.daysAgo', { days: Math.round(hours / 24) }) : `${Math.round(hours / 24)}d ago`);
       }
     }
     return provider?.stale
-      ? { text: `Stale · ${age}`, age, tone: 'stale' }
-      : { text: `Updated ${age}`, age, tone: 'ok' };
+      ? { text: `${t ? t('settings.limits.status.stale') : 'Stale'} · ${age}`, age, tone: 'stale' }
+      : { text: t ? t('limits.updated', { age }) : `Updated ${age}`, age, tone: 'ok' };
   }
 
   function limitProviderStatusLabel(provider = {}) {
@@ -462,6 +518,12 @@
     if (status === 'ok') return { label: isLinkedStatus(provider) ? 'Linked' : 'Live', tone: 'ok' };
     if (status === 'disabled') return { label: 'Disabled', tone: 'muted' };
     if (status === 'noSyncedData') return { label: 'No synced data', tone: 'sync' };
+    // Local OAuth recovery requires signing in, not replacing an API key.
+    if (providerName === 'minimax' && sourceId(provider) === 'oauth' && ['unauthorized', 'notConfigured'].includes(status)) {
+      return status === 'unauthorized'
+        ? { label: 'Sign in again', tone: 'setup' }
+        : { label: 'Sign in', tone: 'setup' };
+    }
     if (status === 'unauthorized') {
       if (providerName === 'kimi') return { label: 'Update credential', tone: 'setup' };
       if (providerName === 'thirdparty') return { label: 'Update credential', tone: 'setup' };
@@ -496,7 +558,7 @@
           : providerName === 'grok'
           ? { label: 'Re-login', tone: 'setup' }
           : providerName === 'muse'
-          ? { label: 'Run muse login', tone: 'setup' }
+          ? { label: sourceId(provider) === 'web' ? 'Sign in again' : 'Run muse login', tone: 'setup' }
           : { label: 'Sign in again', tone: 'setup' };
     }
     if (status === 'rateLimited') return { label: 'Limited', tone: 'warn' };
@@ -506,7 +568,7 @@
     if (status === 'notConfigured') {
       if (providerName === 'kimi' || providerName === 'ollama') return { label: 'Add credential', tone: 'setup' };
       if (providerName === 'antigravity') return { label: 'Not set up', tone: 'setup' };
-      if (providerName === 'cursor' || providerName === 'copilot' || providerName === 'zed' || providerName === 'typesafe' || providerName === 'stepfun' || providerName === 'qoder' || providerName === 'trae' || providerName === 'workbuddy' || providerName === 'commandcode' || providerName === 'alibaba') return { label: 'Sign in', tone: 'setup' };
+      if (providerName === 'cursor' || providerName === 'copilot' || providerName === 'zed' || providerName === 'typesafe' || providerName === 'stepfun' || providerName === 'qoder' || providerName === 'trae' || providerName === 'workbuddy' || providerName === 'commandcode' || providerName === 'alibaba' || providerName === 'ollama' || providerName === 'manus') return { label: 'Sign in', tone: 'setup' };
       if (providerName === 'thirdparty') return { label: 'Add credential', tone: 'setup' };
       // Cline joins the key-configured family: with neither a key nor a stored
       // sign-in, the one thing this application can be told is a key (the sign-in
@@ -514,7 +576,7 @@
       if (providerName === 'openrouter' || providerName === 'deepseek' || providerName === 'minimax' || providerName === 'factory' || providerName === 'zai' || providerName === 'zaiteam' || providerName === 'volcengine' || providerName === 'kimi' || providerName === 'cline') return { label: 'Add API key', tone: 'setup' };
       if (providerName === 'grok') return { label: 'Run grok login', tone: 'setup' };
       if (providerName === 'kiro') return { label: 'Run kiro-cli login', tone: 'setup' };
-      if (providerName === 'muse') return { label: 'Install Muse Code', tone: 'setup' };
+      if (providerName === 'muse') return { label: sourceId(provider) === 'web' ? 'Add credential' : 'Install Muse Code', tone: 'setup' };
       return { label: 'Not set up', tone: 'setup' };
     }
     return status ? { label: 'Error', tone: 'warn' } : null;
@@ -681,6 +743,10 @@
 
   function limitProviderSettingsRecord(providers, id) {
     const rows = (providers || []).filter((row) => row.provider === id);
+    if (id === 'minimax') {
+      return rows.findLast((row) => row.status === 'ok')
+        || rows.find((row) => row.source === 'api') || rows.at(-1);
+    }
     if (id !== 'mimo') return rows.at(-1);
     // Either healthy product keeps the provider connected. Otherwise prefer the
     // Console status, since Settings manages that credential rather than membership.
@@ -707,6 +773,7 @@
     limitProviderProvenance,
     limitBoundaryText,
     limitDurationText,
+    limitDisplayLabel,
     limitResetRemainingMs,
     limitProviderSourceLabel,
     limitProviderStatusLabel,

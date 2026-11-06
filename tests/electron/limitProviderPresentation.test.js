@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { translate } = require('../../src/electron/renderer/i18n');
 const { rendererStyles } = require('../helpers/rendererStyles');
 const vm = require('node:vm');
 const accountIdentityApi = require('../../src/electron/renderer/accountIdentity');
@@ -353,16 +354,8 @@ function runProviderSpendNode(source, balance, provider = null) {
     currentLocale: () => 'en-US',
     formatCompact: (value) => compactTokenApi.formatCompactTokens(value, 'western', 'en-US'),
     compactTokenThreshold: () => compactTokenApi.compactTokenUnitThreshold('western', 'en-US'),
-    t: (key) => ({
-      'settings.typesafe.estimatedSpend': 'Estimated spend',
-      'settings.typesafe.today': 'Today',
-      'settings.typesafe.lastSevenDays': 'Last 7 days',
-      'settings.typesafe.month': 'Month',
-      'settings.typesafe.tokens': 'Tokens',
-      'settings.thirdparty.inputTokens': 'Input tokens',
-      'settings.thirdparty.outputTokens': 'Output tokens',
-      'settings.thirdparty.requests': 'Requests'
-    })[key] || key,
+    t: (key, params) => translate('en', key, params),
+    presentationApi: presentation,
     limitNoteRowNode: (options) => options,
     tagUsageItem: (node) => node
   };
@@ -392,7 +385,7 @@ function runCodexAdditionalWindowLabel(window, siblingWindows) {
   const formatter = viewBody('codexAdditionalWindowLabel', 'antigravityQuotaGroups');
   return vm.runInNewContext(
     `${formatter}\ncodexAdditionalWindowLabel(${JSON.stringify(window)}, ${JSON.stringify(siblingWindows)});`,
-    { presentationApi: { codexAdditionalQuotaDisplayName } }
+    { presentationApi: { codexAdditionalQuotaDisplayName }, t: (key, params) => translate('en', key, params) }
   );
 }
 
@@ -469,8 +462,8 @@ test('Limits and Home distinguish resets, expiries, and simultaneous boundaries'
   );
   assert.equal(limitBoundaryText({ resetsAt: '' }), '');
   assert.match(app, /const formatLimitBoundary = limitProviderPresentationApi\.limitBoundaryText;/);
-  assert.match(limitWindow, /window\?\.resetsAt\s*\? formatLimitBoundary\(window\)/);
-  assert.match(homeLimits, /window\.resetsAt\s*\?\s*formatLimitBoundary\(window\)/);
+  assert.match(limitWindow, /window\?\.resetsAt\s*\? formatLimitBoundary\(window, t\)/);
+  assert.match(homeLimits, /window\.resetsAt\s*\?\s*formatLimitBoundary\(window, t\)/);
   assert.doesNotMatch(app, /noActiveLimitWindow|formatResetDuration/);
 });
 
@@ -507,7 +500,6 @@ test('capability tags explain how each provider is collected in settings', () =>
   assert.deepEqual(limitProviderCapabilityTags('cursor'), ['Auto', 'Web']);
   assert.deepEqual(limitProviderCapabilityTags('antigravity'), ['Auto', 'OAuth/App/CLI']);
   assert.deepEqual(limitProviderCapabilityTags('opencode'), ['Auto', 'API/Web']);
-  assert.deepEqual(limitProviderCapabilityTags('minimax'), ['Token Plan', 'Pay-as-you-go', 'API key']);
   assert.deepEqual(limitProviderCapabilityTags('grok'), ['Auto', 'CLI/Web']);
   assert.deepEqual(limitProviderCapabilityTags('copilot'), ['Manual login', 'API']);
   assert.deepEqual(limitProviderCapabilityTags('unknown'), []);
@@ -515,13 +507,20 @@ test('capability tags explain how each provider is collected in settings', () =>
 
 test('Minimax capability tags are localized in settings', () => {
   const app = readRendererFile('app.js');
-  const i18n = readRendererFile('i18n.js');
-
-  assert.match(app, /'Token Plan': 'settings\.limits\.capability\.tokenPlan'/);
-  assert.match(i18n, /'settings\.limits\.capability\.tokenPlan': 'Token Plan'/);
-  assert.match(i18n, /'settings\.limits\.capability\.apiKey': 'API key'/);
-  assert.match(i18n, /'settings\.limits\.capability\.apiKey': 'API 金鑰'/);
-  assert.match(i18n, /'settings\.limits\.capability\.apiKey': 'API 密钥'/);
+  const i18n = require('../../src/electron/renderer/i18n');
+  const start = app.indexOf('const LIMIT_CAPABILITY_TAG_KEYS = {');
+  const keys = app.slice(start, app.indexOf('\n};', start) + 3);
+  const translate = functionBody(app, 'translatedLimitCapabilityTag', 'translatedLimitProviderTag');
+  for (const locale of Object.keys(i18n.MESSAGES)) {
+    const tags = vm.runInNewContext(`${keys}\n${translate}\ntags.map(label => ({ key: LIMIT_CAPABILITY_TAG_KEYS[label], text: translatedLimitCapabilityTag(label) }));`, {
+      tags: limitProviderCapabilityTags('minimax'),
+      t: key => i18n.translate(locale, key)
+    });
+    for (const tag of tags) {
+      assert.ok(tag.key, `${locale}: an actual MiniMax tag must use the shared vocabulary`);
+      assert.ok(tag.text && tag.text !== tag.key, `${locale}: ${tag.key}`);
+    }
+  }
 });
 
 test('Coding Plan capability tags are localized in settings', () => {
@@ -625,6 +624,22 @@ test('undetected settings tags include status and supported collection hints', (
 });
 
 test('detected settings tags show only current source after status', () => {
+  assert.deepEqual(
+    limitProviderSettingsTags({ provider: 'muse', status: 'ok', source: 'cli' }).map((tag) => tag.label),
+    ['Live', 'CLI']
+  );
+  assert.deepEqual(
+    limitProviderSettingsTags({ provider: 'muse', status: 'ok', source: 'web' }).map((tag) => tag.label),
+    ['Linked', 'Web']
+  );
+  assert.deepEqual(
+    limitProviderSettingsTags({ provider: 'manus', status: 'ok', source: 'local', sourceDetail: 'app' }).map((tag) => tag.label),
+    ['Live', 'Local']
+  );
+  assert.deepEqual(
+    limitProviderSettingsTags({ provider: 'manus', status: 'ok', source: 'web' }).map((tag) => tag.label),
+    ['Linked', 'Web']
+  );
   assert.deepEqual(
     limitProviderSettingsTags({ provider: 'claude', status: 'ok', source: 'web' })
       .map((tag) => tag.label),
@@ -908,10 +923,10 @@ test('every multi-account Limits group uses its provider-localized account count
   // key itself.
   assert.match(view, /const key = GROUP_COUNT_KEYS\[providerId\] \|\| `settings\.\$\{providerId\}\.nAccounts`;/);
   assert.match(view, /return text === key \? '' : text;/);
-  assert.match(view, /planText: count \? limitGroupCountText\(providerId, count\) : ''/);
+  assert.match(view, /count \? limitGroupCountText\(providerId, count\) : ''/);
   assert.match(view, /providerId, label, providers, color, \{ count: providers\.length, markId \}/);
   assert.doesNotMatch(view, /settings\.(claude|codex|mimo|opencode|openrouter|thirdparty)\.nAccounts/);
-  for (const provider of ['claude', 'codex', 'mimo', 'opencode', 'openrouter', 'thirdparty']) {
+  for (const provider of ['claude', 'codex', 'minimax', 'mimo', 'opencode', 'openrouter', 'thirdparty']) {
     assert.match(i18n, new RegExp(`'settings\\.${provider}\\.nAccounts'`));
   }
 });
@@ -1448,7 +1463,7 @@ test('Codex renders Monthly quota and manual reset credits below rolling windows
   assert.match(renderProviderWindows, /settings\(\)\?\.showCodexAdditionalLimits === false\s*\? \[\]\s*: \(provider\.windows \|\| \[\]\)\.filter\(\(window\) => window\?\.additional === true\);/);
   assert.match(renderProviderWindows, /codexAdditionalWindowLabel\(additional, additionalWindows\)/);
   assert.match(renderProviderWindows, /additionalNode\.classList\.add\('limit-window-wide'\);/);
-  assert.match(codexAdditionalWindowLabel, /if \(!name\) return period \|\| 'Additional limit';/);
+  assert.match(codexAdditionalWindowLabel, /if \(!name\) return period \|\| t\('limits.additional'\);/);
   assert.match(codexAdditionalWindowLabel, /codexAdditionalQuotaDisplayName\(name\)/);
   assert.match(codexAdditionalWindowLabel, /matchingWindowCount > 1 && period \? `\$\{displayName\} · \$\{period\}` : displayName/);
   assert.match(codexAdditionalWindowLabel, /codexAdditionalWindowPeriodLabel\(window\)/);
@@ -1457,13 +1472,13 @@ test('Codex renders Monthly quota and manual reset credits below rolling windows
   assert.match(renderProviderWindows, /const resetNode = codexResetCreditsNode\(provider\.resetCredits\);/);
   assert.doesNotMatch(renderProviderWindows, /limitWindowNode\('Reset credits'/);
   assert.match(resetCreditsValue, /if \(count <= 0\) return '';/);
-  assert.match(resetCreditsValue, /return `\$\{count\} reset\$\{count === 1 \? '' : 's'\}`;/);
+  assert.match(resetCreditsValue, /t\(count === 1 \? 'limits.reset.one' : 'limits.reset.many', \{ count \}\)/);
   assert.match(resetCreditExpirationDates, /resetCredits\?\.expirations/);
   assert.match(resetCreditExpirationDates, /\.sort\(\(a, b\) => a\.getTime\(\) - b\.getTime\(\)\)/);
   assert.match(resetCreditExpirationDates, /resetCredits\?\.nextExpiresAt/);
-  assert.match(resetCreditExpiryLabel, /diffMs <= 0 \? 'now'/);
+  assert.match(resetCreditExpiryLabel, /diffMs <= 0 \? t\('limits.now'\)/);
   assert.match(resetCreditExpiryLabel, /formatDuration\(diffMs\)/);
-  assert.match(resetCreditExpiryDetailLabel, /`Expires in \$\{formatDuration\(diffMs\)\}`/);
+  assert.match(resetCreditExpiryDetailLabel, /t\('limits.expiryIn', \{ duration: formatDuration\(diffMs\) \}\)/);
   assert.match(
     resetCreditExpiryDateLabel,
     /Intl\.DateTimeFormat\(currentLocale\(\), \{\s*month: 'numeric',\s*day: 'numeric',\s*hour: 'numeric',\s*minute: '2-digit'\s*\}\)/
@@ -1489,7 +1504,7 @@ test('Codex renders Monthly quota and manual reset credits below rolling windows
     codexResetCreditsNode,
     /expirationDates\.map\(\(date\) => \[expiryDateLabel\(date\), codexResetCreditExpiryLabel\(date\)\]\)/
   );
-  assert.match(codexResetCreditsNode, /`Reset \$\{index \+ 1\}: \$\{codexResetCreditExpiryDetailLabel\(date\)\}`/);
+  assert.match(codexResetCreditsNode, /t\('limits.reset.number', \{ number: index \+ 1 \}\)/);
   assert.doesNotMatch(codexResetCreditsNode, /addEventListener/);
   assert.doesNotMatch(codexResetCreditsNode, /state\.limitDetailTooltip/);
   assert.match(codexResetCreditsNode, /formatCodexResetCreditsValue\(resetCredits\)/);
@@ -1541,6 +1556,7 @@ function runClaudePrepaidGrantRows(app, tranches, currency, now) {
     },
     Intl,
     currentLocale: () => 'en-US',
+    t: (key, params) => translate('en', key, params),
     formatMoney: (value, code) => `${code === 'USD' ? '$' : `${code} `}${Number(value).toFixed(2)}`,
     formatDuration: limitDurationText
   };
@@ -1629,6 +1645,7 @@ function runClaudeResetGrantRows(app, grants, now) {
     },
     Intl,
     currentLocale: () => 'en-US',
+    t: (key, params) => translate('en', key, params),
     formatDuration: limitDurationText
   };
   vm.runInNewContext(
@@ -1701,6 +1718,19 @@ test('Claude reset grants wrap their label and clears as full-width lines', () =
   assert.match(styles, /\.limit-detail-tooltip-full\.is-caption\s*\{[^}]*font-size: 0\.5rem;/s);
 });
 
+test('Home preserves explicit provider window names and translates unnamed windows', () => {
+  const source = functionBody(readRendererFile('app.js'), 'homeLimitWindowLabel', 'renderHomeLimitModule');
+  const context = {
+    limitProviderPresentationApi: require('../../src/electron/renderer/limits/providerPresentation'),
+    t: (key, params) => translate('es', key, params)
+  };
+  vm.runInNewContext(source, context);
+  for (const kind of ['daily', 'billing', 'weekly']) {
+    assert.equal(context.homeLimitWindowLabel({ kind, label: 'Bonus' }, 'zai'), 'Bonus');
+  }
+  assert.equal(context.homeLimitWindowLabel({ kind: 'weekly' }, 'codex'), 'Semanal');
+});
+
 test('Home uses explicit billing labels so Copilot Premium and Chat stay distinct', () => {
   const app = readRendererFile('app.js');
   const i18n = readRendererFile('i18n.js');
@@ -1709,11 +1739,10 @@ test('Home uses explicit billing labels so Copilot Premium and Chat stay distinc
   const homeModule = functionBody(app, 'renderHomeLimitModule', 'renderHomeModelModule');
   const valueFormatter = functionBody(app, 'formatHomeLimitWindowValue', 'providersByLimitProviderId');
 
-  assert.match(homeLabel, /if \(window\?\.kind === 'billing'\) \{/);
-  assert.match(homeLabel, /limitProviderCompactWindowLabel\(providerId, window, visibleWindows\)/);
+  assert.match(homeLabel, /limitProviderCompactWindowLabel\(providerId, window, visibleWindows, t\)/);
   assert.match(homeRows, /limitProviderCompactWindows\(\s*provider,\s*\(provider\.windows \|\| \[\]\)\.filter\(/);
   assert.match(homeLabel, /const label = String\(window\?\.label \|\| ''\)\.trim\(\);/);
-  assert.match(homeLabel, /if \(label\) return label;/);
+  assert.match(homeLabel, /if \(label\) return limitProviderPresentationApi\.limitDisplayLabel\(label, t, \{ explicit: true \}\);/);
   assert.match(homeLabel, /billing: 'home\.limit\.billing'/);
   // Balance windows arrive as real `billing` windows carrying their own label
   // ('Balance' / 'Token quota'), so the label branch above already covers them
@@ -1721,11 +1750,11 @@ test('Home uses explicit billing labels so Copilot Premium and Chat stay distinc
   assert.doesNotMatch(homeLabel, /kind === 'balance'/);
   assert.match(homeModule, /const showUsed = Boolean\(state\.settings\?\.showLimitUsed\);/);
   assert.match(homeModule, /value\.textContent = window\.value \|\| formatHomeLimitWindowValue\(window, showUsed\);/);
-  assert.match(homeModule, /limitProviderCompactWindowPeriodLabel\(row\.providerId, window, row\.windows\)/);
+  assert.match(homeModule, /limitProviderCompactWindowPeriodLabel\(row\.providerId, window, row\.windows, t\)/);
   assert.match(homeModule, /`\$\{periodLabel\} · \$\{resetLabel\}`/);
   assert.match(valueFormatter, /if \(isCreditsWindow\(window\)\) \{/);
   assert.match(valueFormatter, /formatCompactMoney\(window\.remaining, window\.currency, state\.settings\?\.compactTokenUnits, currentLocale\(\)\)/);
-  assert.match(valueFormatter, /`\$\{formatPercent\(percent\)\} \$\{limitModeSuffix\(showUsed\)\}`/);
+  assert.match(valueFormatter, /`\$\{formatPercent\(percent\)\} \$\{limitModeSuffix\(showUsed, t\)\}`/);
   assert.doesNotMatch(i18n, /home\.limit\.(balance|leftPercent|leftAmount)/);
 });
 
@@ -1844,9 +1873,9 @@ test('TypeSafe row mirrors the Spend row with token totals and keeps the month b
 test('Balance and token quota values omit the redundant left suffix', () => {
   const renderProviderWindows = viewBody('renderProviderWindows');
 
-  assert.match(renderProviderWindows, /'Balance',\s*\{ \.\.\.balanceWindow, label: 'Balance' \},\s*color,\s*0\.95,\s*formatMoney\(balanceAmount, currency\)/);
+  assert.match(renderProviderWindows, /'Balance',\s*\{ \.\.\.balanceWindow, label: '' \},\s*color,\s*0\.95,\s*formatMoney\(balanceAmount, currency\)/);
   assert.match(renderProviderWindows, /const meterPercent = creditsMeterPercent\(provider, quotaWindow\);/);
-  assert.match(renderProviderWindows, /\{\s*\.\.\.\(quotaWindow \|\| \{ showMeter: false \}\),\s*label: balanceLabel,/);
+  assert.match(renderProviderWindows, /\{\s*\.\.\.\(quotaWindow \|\| \{ showMeter: false \}\),\s*label: quotaWindow\?\.label \|\| '',/);
   assert.match(renderProviderWindows, /\.\.\.\(meterPercent !== null \? \{ remainingPercent: meterPercent, showMeter: true \} : \{\}\)/);
   assert.match(renderProviderWindows, /\},\s*color,\s*0\.95,\s*balanceValue/);
   assert.doesNotMatch(renderProviderWindows, /`\$\{formatMoney\(balanceAmount, currency\)\} left`/);
@@ -1875,7 +1904,8 @@ test('MiMo Limits draws a credits balance when the provider balance object is ab
     mimoTokenPlanWindowFromBalance: () => null,
     formatMoney,
     limitWindowNode: (label, window, _color, _tone, value, detail) => Object.assign(makeNode(), { label, window, value, detail }),
-    t: (key) => key,
+    t: (key, params) => translate('en', key, params),
+    presentationApi: presentation,
     provider: {
       provider: 'mimo', accountLabel: 'Pay-as-you-go', status: 'ok',
       windows: [{ kind: 'billing', metric: 'credits', label: 'Balance', remaining: 9.95, currency: 'CNY' }]
@@ -1961,24 +1991,18 @@ test('account validation reads the local device raw limits, not the collapsed ag
   const app = readRendererFile('app.js');
   const rawHelper = functionBody(app, 'localDeviceLimitsProviders', 'localProviderStatus');
   const helper = functionBody(app, 'localProviderStatus', 'renderAntigravityStatus');
-  // Sync-mode aggregateLimits() collapses a local `unauthorized` row out in favor
-  // of a remote `ok` (providerCollapseKey for deepseek/minimax/grok is just the
-  // provider name; pickBetterProvider keeps the higher statusRank). So the account
-  // card must read the LOCAL device's RAW limits from state.stats.devices, where
-  // the local unauthorized row still lives — not state.stats.limits.providers,
-  // where it has already been dropped. Searching the aggregate would miss the
-  // local row and fall back to the remote `ok`, falsely reporting an invalid
-  // local key as Linked.
+  // A healthy remote reading cannot validate the local credential.
   assert.match(rawHelper, /accountIdentityApi\.localDeviceLimitsProviders/);
   assert.match(rawHelper, /state\.stats/);
   assert.match(rawHelper, /state\.settings\?\.deviceId/);
   assert.match(helper, /localDeviceLimitsProviders\(\)/);
   assert.match(helper, /localProviders !== null/);
-  // Falls back to the aggregate only for legacy/non-aggregated stats that do
-  // not expose raw device rows at all.
+  // Legacy stats without raw device rows retain aggregate fallback.
   assert.match(helper, /state\.stats\?\.limits\?\.providers/);
-  // DeepSeek and MiniMax reach it through the shared account-form lane.
-  assert.match(functionBody(app, 'externalProviderForAccount', 'externalProviderAccountLinked'), /const provider = localProviderStatus\(providerName\);/);
+  // The default account form reads the local row. Muse follows its web session.
+  const externalAccount = functionBody(app, 'externalProviderForAccount', 'externalProviderAccountLinked');
+  assert.match(externalAccount, /localProviderStatus\(providerName\);/);
+  assert.match(externalAccount, /source === 'web'/);
 });
 
 test('account validation does not treat a sole remote synced device as local', () => {
@@ -2117,7 +2141,7 @@ test('Cline exposes its API key through the settings and credential-store patter
   assert.match(windowsView, /const clineCredits = clineBilling\.find\(\(window\) => isCreditsWindow\(window\)\)/);
   assert.match(windowsView, /const clineSpend = clineBilling\.find\(\(window\) => window\.metric === 'spend'\)/);
   assert.match(windowsView, /clineCredits[\s\S]{0,200}clineCreditsNode\(provider, clineCredits, clineSpend\)/);
-  assert.match(windowsView, /function clineCreditsNode[\s\S]{0,500}\[\['Month spent', spendValue\]\]/);
+  assert.match(viewBody('clineCreditsNode'), /\[\[t\('limits.monthSpent'\), spendValue\]\]/);
   assert.match(windowsView, /clineMonthly[\s\S]{0,200}limit-window-wide/);
 });
 
@@ -2649,14 +2673,38 @@ test('settings pushes sync once while repainting the background main view', () =
   assert.equal([...settingsPush.matchAll(/syncSettingsForm/g)].length, 1);
 });
 
-test('main limits rerenders coalesce identical visible provider data', () => {
-  const app = readRendererFile('app.js');
-  const renderLimits = functionBody(app, 'renderLimits', 'serviceStatusLabel');
-
-  assert.match(renderLimits, /const renderSignature = JSON\.stringify\(\{/);
-  assert.match(renderLimits, /state\.limitPanelRenderSignature === renderSignature/);
-  assert.match(renderLimits, /els\.limitsPanel\.children\.length === orderedProviders\.length/);
-  assert.match(renderLimits, /state\.limitPanelRenderSignature = renderSignature;/);
+test('main limits cache reuses unchanged data and repaints when token units change', () => {
+  const source = functionBody(readRendererFile('app.js'), 'renderLimits', 'serviceStatusLabel');
+  let paints = 0;
+  const state = { settings: { compactTokenUnits: 'western' }, stats: { limits: { providers: [{ provider: 'muse', source: 'web', status: 'ok' }] } } };
+  const context = vm.createContext({
+    state,
+    Date: class extends Date { static now() { return 1793512800000; } },
+    els: { limitsPanel: { children: [], replaceChildren(...nodes) { this.children = nodes; paints++; } } },
+    currentLocale: () => 'zh-TW',
+    limitDetailTooltipShouldHoldRender: () => false,
+    codexAccountControl: { deferRender: () => false, stateSignature: () => [] },
+    enabledLimitProviderSet: () => new Set(['muse']),
+    providersByLimitProviderId: records => new Map([['muse', records]]),
+    LIMIT_PROVIDERS: [{ id: 'muse', label: 'Muse' }],
+    limitProviderOrderApi,
+    captureLimitResetMotion: () => null,
+    animateCachedLimitBarsFromZero() {},
+    animateLimitResets() {},
+    limitProviderColor: () => '#0866FF',
+    renderLimitProviderSolo: () => ({})
+  });
+  vm.runInContext(source, context);
+  const render = () => vm.runInContext('renderLimits()', context);
+  render();
+  render();
+  assert.equal(paints, 1, 'unchanged readings reuse the existing row');
+  state.settings.compactTokenUnits = 'localized';
+  render();
+  assert.equal(paints, 2, 'a unit change repaints immediately without a new reading');
+  state.settings.compactTokenUnits = 'western';
+  render();
+  assert.equal(paints, 3, 'switching back also repaints');
 });
 
 test('successful providers use a green dot while preserving source and account labels', () => {
@@ -2923,7 +2971,9 @@ test('third-party API uses credential setup copy and relay capability tags', () 
   );
 });
 
-test('minimax status copy uses the same API key wording as CodexBar', () => {
+test('MiniMax limit-row statuses keep Code sign-in separate from API-key setup', () => {
+  assert.equal(presentation.limitProviderSourceLabel({ provider: 'minimax', source: 'oauth' }), 'OAuth');
+  assert.equal(presentation.limitProviderSourceLabel({ provider: 'minimax', source: 'api' }), 'API');
   assert.deepEqual(
     presentation.limitProviderStatusLabel({ provider: 'minimax', status: 'notConfigured' }),
     { label: 'Add API key', tone: 'setup' }
@@ -2932,6 +2982,14 @@ test('minimax status copy uses the same API key wording as CodexBar', () => {
     presentation.limitProviderStatusLabel({ provider: 'minimax', status: 'unauthorized' }),
     { label: 'Update API key', tone: 'setup' }
   );
+  for (const [status, expected] of [
+    ['notConfigured', { label: 'Sign in', tone: 'setup' }],
+    ['unauthorized', { label: 'Sign in again', tone: 'setup' }],
+    ['unavailable', { label: 'Unavailable', tone: 'warn' }],
+    ['ok', { label: 'Live', tone: 'ok' }]
+  ]) {
+    assert.deepEqual(presentation.limitProviderStatusLabel({ provider: 'minimax', status, source: 'oauth' }), expected, `oauth ${status}`);
+  }
 });
 
 test('MiMo uses shared Limits statuses while keeping errors distinct from rejected sessions', () => {
@@ -2949,22 +3007,20 @@ test('MiMo uses shared Limits statuses while keeping errors distinct from reject
   );
 });
 
-test('MiMo settings stays connected while one independent product is live', () => {
-  const live = { provider: 'mimo', status: 'ok', accountKey: 'console', accountLabel: 'Console' };
-  const expired = { provider: 'mimo', status: 'unauthorized', accountKey: 'membership', accountLabel: 'Desktop Membership' };
-  assert.equal(presentation.limitProviderSettingsRecord([live, expired], 'mimo'), live);
-  assert.equal(presentation.limitProviderSettingsRecord([expired, live], 'mimo'), live);
-  assert.equal(presentation.limitProviderSettingsRecord([live, expired], 'codex'), undefined);
-  // Neither live: the console product is the row the account is named by.
-  assert.equal(
-    presentation.limitProviderSettingsRecord([expired, { ...live, status: 'unauthorized' }], 'mimo').accountKey,
-    'console'
-  );
-  assert.equal(presentation.limitProviderSettingsRecord([expired], 'mimo'), expired);
-});
+for (const id of ['mimo', 'minimax']) {
+  test(`${id} settings stays connected while one independent product is live`, () => {
+    const live = { provider: id, accountKey: 'console', accountLabel: 'Console', status: 'ok', source: 'api' };
+    const expired = { provider: id, accountKey: 'membership', accountLabel: 'Desktop Membership', status: 'unauthorized', source: id === 'mimo' ? 'local' : 'oauth', sourceDetail: 'app' };
+    assert.equal(presentation.limitProviderSettingsRecord([live, expired], id), live);
+    assert.equal(presentation.limitProviderSettingsRecord([expired, live], id), live);
+    assert.equal(presentation.limitProviderSettingsRecord([live, expired], 'codex'), undefined);
+    assert.equal(presentation.limitProviderSettingsRecord([expired, { ...live, status: 'unauthorized' }], id).accountKey, 'console');
+    assert.equal(presentation.limitProviderSettingsRecord([expired], id), expired);
+  });
+}
 
 test('OpenRouter grouped plan policy separates profile identities, explicit plans, and recovery status', () => {
-  const view = createLimitWindowsView({ presentation: require('../../src/electron/renderer/limits/providerPresentation') });
+  const view = createLimitWindowsView({ presentation, t: (key, params) => translate('en', key, params) });
   for (const [status, recovery] of [['ok', ''], ['unauthorized', 'Sign in again'], ['unavailable', 'Unavailable']]) {
     for (const stale of [true, false]) {
       for (const grouped of [true, false]) {
@@ -2980,7 +3036,7 @@ test('OpenRouter grouped plan policy separates profile identities, explicit plan
 });
 
 test('OpenCode grouped plan policy preserves explicit plans beside legacy profile titles', () => {
-  const view = createLimitWindowsView({ presentation: require('../../src/electron/renderer/limits/providerPresentation') });
+  const view = createLimitWindowsView({ presentation, t: (key, params) => translate('en', key, params) });
   const provider = { provider: 'opencode', status: 'ok', accountLabel: 'Work profile' };
   for (const [planLabel, expected] of [['', ''], ['   ', ''], ['Zen', 'Zen'], ['Go', 'Go'], [' Zen ', 'Zen']]) {
     assert.equal(view.limitAccountPlan({ ...provider, planLabel }, { grouped: true }), expected);
@@ -2999,7 +3055,7 @@ test('OpenCode grouped plan policy preserves explicit plans beside legacy profil
 });
 
 test('Cursor shared plan cells omit email identities while preserving membership and legacy plans', () => {
-  const view = createLimitWindowsView({ presentation: require('../../src/electron/renderer/limits/providerPresentation') });
+  const view = createLimitWindowsView({ presentation, t: (key, params) => translate('en', key, params) });
   const provider = { provider: 'cursor', status: 'ok', accountEmail: 'alice@example.com', accountLabel: 'alice@example.com', planLabel: '' };
   for (const resolve of [view.limitProviderPlan, view.limitAccountPlan]) {
     assert.equal(resolve(provider), '');
@@ -3019,7 +3075,7 @@ test('MiMo plan cells keep missing plan names empty and use shared recovery text
     mimoAccountGroups: limitWindowLabels.mimoAccountGroups,
     accountIdentity: require('../../src/electron/renderer/accountIdentity'),
     settings: () => ({}),
-    t: (key) => key,
+    t: (key, params) => translate('en', key, params),
     presentation: presentation
   });
   assert.equal(
@@ -3061,7 +3117,7 @@ test('a healthy MiMo row keeps its meta line free of recovery prompts', () => {
     mimoProductLabel: limitWindowLabels.mimoProductLabel,
     mimoAccountGroups: limitWindowLabels.mimoAccountGroups,
     accountIdentity: require('../../src/electron/renderer/accountIdentity'),
-    t: (key) => ({ 'settings.limits.status.signInAgain': '重新登录' })[key] || key,
+    t: (key, params) => ({ 'settings.limits.status.signInAgain': '重新登录' })[key] || translate('en', key, params),
     presentation,
     settings: () => ({})
   });

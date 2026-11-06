@@ -29,6 +29,10 @@ test('a spend meter reads as money for whichever provider reported it', () => {
   assert.equal(text('cursor', uncapped).value, '$2.35 spent');
   // A zero cap is not a denominator.
   assert.equal(text('cursor', { ...uncapped, limit: 0 }).value, '$2.35 spent');
+  const { translate } = require('../../src/electron/renderer/i18n');
+  assert.equal(limitWindowText({ provider: 'cursor' }, uncapped, {
+    t: (key, params) => translate('es', key, params)
+  }).value, '$2.35 gastados');
 });
 
 test('a money grant keeps the percentage headline and puts the amount underneath', () => {
@@ -54,6 +58,11 @@ test('a meterless overage is one line with no bar behind it', () => {
   assert.equal(text('kiro', { kind: 'billing', showMeter: false, remaining: 0.56 }).value, '$0.56');
   // A metered pool counts units instead.
   assert.equal(text('kiro', { kind: 'billing', used: 120, limit: 500 }).detail, '380/500');
+  const { translate } = require('../../src/electron/renderer/i18n');
+  const t = (key, params) => translate('es', key, params);
+  for (const [used, expected] of [[1, '1 crédito'], [14, '14 créditos']]) {
+    assert.equal(limitWindowText({ provider: 'kiro' }, { kind: 'billing', showMeter: false, used }, { t }).value, expected);
+  }
 });
 
 // Each provider's rule applies to the window kind the Limits view applies it
@@ -78,6 +87,13 @@ test('a provider rule only touches the window kind it belongs to', () => {
   assert.equal(text('zai', { kind: 'billing', label: 'MCP', remaining: 100, limit: 200 }).detail, '');
   assert.equal(text('zai', { kind: 'daily', remaining: 100, limit: 200 }).detail, '100 / 200');
   assert.equal(text('zai', { kind: 'billing', limitId: 'zcode-model:x', remaining: 100, limit: 200 }).detail, '100 / 200');
+
+  // MiniMax plan percentages stay bare. Only the video count uses the detail slot.
+  assert.equal(text('minimax', { kind: 'session', label: '5h', usedPercent: 30 }).detail, '');
+  assert.equal(text('minimax', { kind: 'weekly', label: 'Weekly', usedPercent: 10 }).detail, '');
+  assert.equal(text('minimax', { kind: 'weekly', label: 'Video', used: 3, limit: 20, remaining: 17 }).detail, '17/20');
+  assert.equal(text('minimax', { kind: 'weekly', label: 'Video', used: 3, limit: 20, remaining: 17 }, true).detail, '3/20');
+  assert.equal(text('minimax', { kind: 'billing', metric: 'credits', label: 'Credits', remaining: 4624 }).detail, '');
 
   for (const id of ['kiro', 'qoder', 'zed', 'kimi']) {
     assert.equal(text(id, { kind: 'session', used: 1, limit: 4, detail: 'x' }).detail, '', id);
@@ -146,7 +162,7 @@ test('both renderers paint from the shared modules, not their own copies', () =>
   // One age formatter, called by both, replacing three hand-rolled copies. The
   // limits meta line is the shared view's, so the page reaches it through the
   // view rather than formatting an age of its own.
-  assert.match(read('src/electron/renderer/limits/windowsView.js'), /presentationApi\.limitProviderFreshness\(provider\)/);
+  assert.match(read('src/electron/renderer/limits/windowsView.js'), /presentationApi\.limitProviderFreshness\(provider, \{ t \}\)/);
   // The card formats no age of its own — it renders the page's rows, so the
   // freshness wording has exactly one call site across both surfaces.
   assert.doesNotMatch(dock, /limitProviderFreshness/);
@@ -171,4 +187,17 @@ test('both renderers paint from the shared modules, not their own copies', () =>
   for (const name of ['windowNode', 'windowGrid', 'appendWindows', 'meterNode', 'windowValueText']) {
     assert.doesNotMatch(dock, new RegExp(`function ${name}\\(`), `${name} should come from the shared view`);
   }
+});
+
+
+test('Mistral amount details follow used/remaining mode without inventing missing amounts', () => {
+  const quota = { kind: 'billing', label: 'Included Vibe Code', used: 5, limit: 150, currency: 'USD' };
+  for (const showUsed of [false, true]) {
+    assert.equal(text('mistral', quota, showUsed).detail, showUsed ? '$5.00 / $150.00' : '$145.00 / $150.00');
+  }
+  assert.equal(text('mistral', { ...quota, used: 0 }, true).detail, '$0.00 / $150.00');
+  assert.equal(text('mistral', { ...quota, used: null }).detail, '');
+  assert.equal(text('mistral', { ...quota, limit: null }).detail, '');
+  assert.equal(text('mistral', { kind: 'billing', usedPercent: 25 }).detail, '');
+  assert.equal(text('mistral', { ...quota, metric: 'credits' }).detail, '');
 });
